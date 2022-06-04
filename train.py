@@ -20,13 +20,14 @@ from tensorflow.python.framework.graph_util import convert_variables_to_constant
 from datasets.dataloader import DataLoaderSegmentation
 
 from networks.deeplabv3plus import DeeplabV3Plus
+from networks.default_unet import default_unet
 
 def parse_arguments():
     parser = argparse.ArgumentParser()
     # experiment information
     parser.add_argument("--wandb", action='store_true', help="use wandb to log data")
     parser.add_argument("--wandb_project_name", default="ILI_ML_Final", type=str, help="your wandb project name")
-    parser.add_argument("--model_name", default="default-Unet", type=str, help="your model name")
+    parser.add_argument("--model_name", default="default_unet", type=str, help="your segmentation model name")
     parser.add_argument("--note", default="experiment note", type=str, help="your model name")
     
 
@@ -34,11 +35,12 @@ def parse_arguments():
     parser.add_argument("--cuda_device", default="0", type=str, help="set visible cuda device")
     parser.add_argument("--epochs", default=10, type=int, help="training iteration")
     parser.add_argument("--batch_size", default=25, type=int, help="batch size")
-    
+
     # deeplabv3 conficuration
     parser.add_argument("--backbone", default="ResNet50", type=str, help="encoder backbone of deeplabv3")
     # default unet configuration
     parser.add_argument("--depth", default=4, type=int, help="unet model depth")
+    parser.add_argument("--ch", default=15, type=int, help="unet channel number")
     args = parser.parse_args()
     return args
 
@@ -47,7 +49,7 @@ print("Tensorflow Version is %s" % tf.__version__)
 if __name__ == '__main__':
 
     args = parse_arguments()
-    experiment_name = f"{args.model_name}-{datetime.today().strftime('%Y-%m-%d-%H-%M')}"
+    experiment_name = f"{args.model_name}:{datetime.today().strftime('%Y-%m-%d-%H-%M')}"
 
     os.environ["CUDA_VISIBLE_DEVICES"]=args.cuda_device
 
@@ -62,41 +64,20 @@ if __name__ == '__main__':
     dataloader_real = torch.utils.data.DataLoader(dataset_real, batch_size=args.batch_size, shuffle=True)
 
 
-    #model = Deeplabv3(weights='pascal_voc', input_tensor=None, 
-    #          input_shape=(256, 256, 3), classes=6, backbone='mobilenetv2',OS=16, alpha=1.)
-
     inputs = tf.placeholder(tf.float32, shape=(None, None, None, 3))
     y_ = tf.placeholder(tf.float32, [None, None, None, 6])
     x = tf.image.resize_images(inputs, (256, 256))
     x = x/255.0
     y = tf.image.resize_images(y_, (256, 256))
-    ch=15
-    #depth=args.depth
-    #xn = []
     b=tf.Variable(0.0)
-    #x=tf.layers.conv2d(x,ch,3,1,'same')
-    #x=tf.layers.batch_normalization(x)
-    #x = tf.nn.relu(x)
-    #for i in range(depth):
-    #  xn.append(x)
-    #  x = tf.layers.conv2d(x,ch*(2**(i+1)),3,1,'same')
-    #  x = tf.layers.batch_normalization(x,center=False,scale=False)+b
-    #  x = tf.nn.relu(x)
-    #  x = tf.layers.conv2d(x,ch*(2**(i+1)),3,1,'same')
-    #  x = tf.layers.batch_normalization(x,center=False,scale=False)+b
-    #  x = tf.nn.relu(x)
-    #  if i <depth-1:
-    #    x = tf.nn.avg_pool(x,[1,2,2,1],[1,2,2,1],'SAME')
-    #for i in range(depth):
-    #  if i>0:
-    #    x = tf.keras.layers.UpSampling2D((2,2))(x)
-    #  x = tf.layers.conv2d(x,ch*(2**(depth-i-1)),3,1,'same')+xn[-i-1]
-    #  x = tf.layers.batch_normalization(x,center=False,scale=False)+b
-    #  x = tf.nn.relu(x)
-    #out = tf.layers.conv2d(x,6,3,1,'same')
-    out = DeeplabV3Plus(x, num_classes=6, backbone=args.backbone)
-    outputs = out
-    outputs = tf.image.resize_images(outputs, (720, 1280))
+
+    if args.model_name == "default_unet":
+      out = default_unet(x, b, depth=args.depth, ch=args.ch)
+      args.backbone = 'CNN'
+    elif args.model_name =="deeplabv3+":
+      out = DeeplabV3Plus(x, num_classes=6, backbone=args.backbone)
+
+    outputs = tf.image.resize_images(out, (720, 1280))
     outputs = tf.argmax(outputs,-1)
 
     y_label = tf.argmax(y_,-1)
@@ -131,6 +112,7 @@ if __name__ == '__main__':
       wandb.config.update(args)
 
     num_epochs = args.epochs
+    best_mIOU = 0.0
     for epoch in range(num_epochs):
       for i, data in enumerate(dataloader, 0):
         input = data[0].numpy()
@@ -158,9 +140,17 @@ if __name__ == '__main__':
           if args.wandb == True:
             wandb.log({"loss": loss_value})
             wandb.log({"mIOU": mIOU[0]})
+          if mIOU[0] > best_mIOU:
+            best_mIOU = mIOU
+            model_path = os.path.join('./models/', experiment_name, f"ckpt_{epoch:06}", "model/")
+            if not os.path.exists(model_path):
+              os.makedirs(model_path)
+            saver.save(sess, model_path)
+            print('checkpoint saved')
           
 
         if i % 300==0:
+
           ts = time.time()
           print('checkpoint saved')
           for i, data in enumerate(dataloader_real, 0):
@@ -168,8 +158,12 @@ if __name__ == '__main__':
             label = data[1].numpy()
             sess.run(train,feed_dict={inputs: input, y_: label})
           inference_time = time.time() - ts
+
           if args.wandb == True:
             wandb.log({"inference time": inference_time})
-          saver.save(sess, './models/')
-      saver.save(sess, './models/')
-      print('checkpoint saved')
+
+          model_path = os.path.join('./models/', experiment_name, f"ckpt_{epoch:06}", "model/")
+          if not os.path.exists(model_path):
+              os.makedirs(model_path)
+          saver.save(sess, model_path)
+          print('checkpoint saved')
