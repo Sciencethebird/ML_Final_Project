@@ -35,9 +35,9 @@ def parse_arguments():
     parser.add_argument("--cuda_device", default="0", type=str, help="set visible cuda device")
     parser.add_argument("--epochs", default=10, type=int, help="training iteration")
     parser.add_argument("--batch_size", default=25, type=int, help="batch size")
-    parser.add_argument("--lr_init", default=0.00001, type=float, help="start learning rate value")
-    parser.add_argument("--lr_decay", default=0.95, type=float, help="decay coeff for exponentail decay schedular")
-    parser.add_argument("--lr_decay_step_rate", default=100, type=int, help="step to use for the decay computation")
+    parser.add_argument("--lr_init", default=0.0001, type=float, help="start learning rate value")
+    parser.add_argument("--lr_decay", default=0.85, type=float, help="decay coeff for exponentail decay schedular")
+    parser.add_argument("--lr_decay_step_rate", default=1000, type=int, help="step to use for the decay computation")
 
     # deeplabv3 conficuration
     parser.add_argument("--backbone", default="ResNet50", type=str, help="encoder backbone of deeplabv3")
@@ -125,28 +125,30 @@ if __name__ == '__main__':
     best_mIOU = 0.0
     for epoch in range(num_epochs):
       for i, data in enumerate(dataloader, 0):
+        # for leanring rate schedule
+        sess.run(increment_global_step)
+        
+        # train
         input = data[0].numpy()
         label = data[1].numpy()
         sess.run(train, feed_dict={inputs: input, y_: label})
-        #model(input)
-        #miou = sess.run(mIOU, feed_dict={inputs: input, y_: label})
-        #ousst = sess.run(out, feed_dict={inputs: input, y_: label})
-        #print(f"mIOU: {ousst}")
-        
-        #print(f"y_label: {sess.run(y_label, feed_dict={inputs: input, y_: label}).shape }")
-        #print(f"out: {sess.run(out, feed_dict={inputs: input, y_: label}).shape}")
-        #print(f"outputs: {sess.run(pred, feed_dict={inputs: input, y_: label}).shape}")
-        #input()
+
+        # log
         if i % 10 == 0:
           # mIOU
           sess.run(tf.local_variables_initializer()) #https://blog.csdn.net/u013841196/article/details/109533542
           sess.run([conf_mat], feed_dict={inputs: input, y_: label}) # I don't know why you need to run conf_mat first
           mIOU = sess.run([iou], feed_dict={inputs: input, y_: label})
-          print(f"mIOU: {mIOU}")
+          
           # loss
           loss_value = sess.run(loss,feed_dict={inputs: input, y_: label})
           print("[%d/%d][%s/%d] loss: %.4f"\
               %(epoch+1, num_epochs, str(i).zfill(4), len(dataloader), loss_value) )
+
+          print(f"[mIOU]: {mIOU}")
+          print(f"[step]:{sess.run(global_step)}")
+          print(f"[_lr ]: {sess.run(optimizer._lr)}")
+
           if args.wandb == True:
             wandb.log({"loss": loss_value})
             wandb.log({"mIOU": mIOU[0]})
