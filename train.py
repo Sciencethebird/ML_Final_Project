@@ -35,6 +35,9 @@ def parse_arguments():
     parser.add_argument("--cuda_device", default="0", type=str, help="set visible cuda device")
     parser.add_argument("--epochs", default=10, type=int, help="training iteration")
     parser.add_argument("--batch_size", default=25, type=int, help="batch size")
+    parser.add_argument("--lr_init", default=0.00001, type=float, help="start learning rate value")
+    parser.add_argument("--lr_decay", default=0.95, type=float, help="decay coeff for exponentail decay schedular")
+    parser.add_argument("--lr_decay_step_rate", default=100, type=int, help="step to use for the decay computation")
 
     # deeplabv3 conficuration
     parser.add_argument("--backbone", default="ResNet50", type=str, help="encoder backbone of deeplabv3")
@@ -85,7 +88,13 @@ if __name__ == '__main__':
 
     loss=tf.nn.softmax_cross_entropy_with_logits_v2(logits=out,labels=y)
     loss=tf.reduce_mean(loss)
-    optimizer = tf.train.AdamOptimizer(learning_rate = 0.00001)
+    
+    # learning rate
+    global_step = tf.Variable(0, trainable=False)
+    increment_global_step = tf.assign(global_step, global_step + 1)
+    learning_rate = tf.train.exponential_decay(args.lr_init, global_step, args.lr_decay_step_rate, args.lr_decay, staircase=True)
+
+    optimizer = tf.train.AdamOptimizer(learning_rate = learning_rate) #0.00001)
     #train = optimizer.minimize(loss+0.0005*b)
     train = optimizer.minimize(loss)
     saver=tf.train.Saver()
@@ -141,6 +150,8 @@ if __name__ == '__main__':
           if args.wandb == True:
             wandb.log({"loss": loss_value})
             wandb.log({"mIOU": mIOU[0]})
+            wandb.log({"learning_rate": sess.run(optimizer._lr)})
+            
           if mIOU[0] > best_mIOU:
             best_mIOU = mIOU
             model_path = os.path.join('./models/', experiment_name, f"ckpt_{epoch:06}", "model/")
