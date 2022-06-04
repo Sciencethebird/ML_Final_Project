@@ -86,7 +86,8 @@ if __name__ == '__main__':
     loss=tf.nn.softmax_cross_entropy_with_logits_v2(logits=out,labels=y)
     loss=tf.reduce_mean(loss)
     optimizer = tf.train.AdamOptimizer(learning_rate = 0.00001)
-    train = optimizer.minimize(loss+0.0005*b)
+    #train = optimizer.minimize(loss+0.0005*b)
+    train = optimizer.minimize(loss)
     saver=tf.train.Saver()
 
     init = tf.global_variables_initializer()
@@ -135,8 +136,8 @@ if __name__ == '__main__':
           print(f"mIOU: {mIOU}")
           # loss
           loss_value = sess.run(loss,feed_dict={inputs: input, y_: label})
-          print("[%d/%d][%s/%d] loss: %.4f b: %.4f "\
-              %(epoch+1, num_epochs, str(i).zfill(4), len(dataloader), loss_value, sess.run(b)) )
+          print("[%d/%d][%s/%d] loss: %.4f"\
+              %(epoch+1, num_epochs, str(i).zfill(4), len(dataloader), loss_value) )
           if args.wandb == True:
             wandb.log({"loss": loss_value})
             wandb.log({"mIOU": mIOU[0]})
