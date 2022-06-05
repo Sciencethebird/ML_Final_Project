@@ -33,11 +33,11 @@ def parse_arguments():
 
     # general training settings
     parser.add_argument("--cuda_device", default="0", type=str, help="set visible cuda device")
-    parser.add_argument("--epochs", default=10, type=int, help="training iteration")
+    parser.add_argument("--epochs", default=40, type=int, help="training iteration")
     parser.add_argument("--batch_size", default=25, type=int, help="batch size")
-    parser.add_argument("--lr_init", default=0.0001, type=float, help="start learning rate value")
+    parser.add_argument("--lr_init", default=0.001, type=float, help="start learning rate value")
     parser.add_argument("--lr_decay", default=0.85, type=float, help="decay coeff for exponentail decay schedular")
-    parser.add_argument("--lr_decay_step_rate", default=1000, type=int, help="step to use for the decay computation")
+    parser.add_argument("--lr_decay_step_rate", default=4000, type=int, help="step to use for the decay computation")
 
     # deeplabv3 conficuration
     parser.add_argument("--backbone", default="ResNet50", type=str, help="encoder backbone of deeplabv3")
@@ -86,6 +86,10 @@ if __name__ == '__main__':
     y_label = tf.argmax(y_,-1)
     iou, conf_mat = tf.metrics.mean_iou(labels=y_label, predictions=outputs, num_classes=6)
 
+    outputs_real = tf.image.resize_images(out, (1080, 1920))
+    outputs_real = tf.argmax(outputs_real,-1)
+    iou_real, conf_mat_real = tf.metrics.mean_iou(labels=y_label, predictions=outputs_real, num_classes=6)
+
     loss=tf.nn.softmax_cross_entropy_with_logits_v2(logits=out,labels=y)
     loss=tf.reduce_mean(loss)
     
@@ -123,6 +127,7 @@ if __name__ == '__main__':
 
     num_epochs = args.epochs
     best_mIOU = 0.0
+    mIOU_train = []
     for epoch in range(num_epochs):
       for i, data in enumerate(dataloader, 0):
         # for leanring rate schedule
@@ -138,23 +143,26 @@ if __name__ == '__main__':
           # mIOU
           sess.run(tf.local_variables_initializer()) #https://blog.csdn.net/u013841196/article/details/109533542
           sess.run([conf_mat], feed_dict={inputs: input, y_: label}) # I don't know why you need to run conf_mat first
-          mIOU = sess.run([iou], feed_dict={inputs: input, y_: label})
-          
+          mIOU = sess.run([iou], feed_dict={inputs: input, y_: label})[0]
+          mIOU_train.append(mIOU)
           # loss
           loss_value = sess.run(loss,feed_dict={inputs: input, y_: label})
           print("[%d/%d][%s/%d] loss: %.4f"\
               %(epoch+1, num_epochs, str(i).zfill(4), len(dataloader), loss_value) )
 
+          print(f"\n========== step {sess.run(global_step)} ==========")
           print(f"[mIOU]: {mIOU}")
-          print(f"[step]:{sess.run(global_step)}")
           print(f"[_lr ]: {sess.run(optimizer._lr)}")
 
           if args.wandb == True:
-            wandb.log({"loss": loss_value})
-            wandb.log({"mIOU": mIOU[0]})
-            wandb.log({"learning_rate": sess.run(optimizer._lr)})
+            wandb.log({"train/loss": loss_value})
+            wandb.log({"train/learning_rate": sess.run(optimizer._lr)})
+            wandb.log({"train/mIOU": mIOU})
+            wandb.log({"train/mIOU(last 10-10 average)": sum(mIOU_train[-10:]) / 10.0})
+            wandb.log({"train/mIOU(last 100-10 average)": sum(mIOU_train[-100:]) / 100.0})
             
-          if mIOU[0] > best_mIOU:
+            
+          if mIOU > best_mIOU:
             best_mIOU = mIOU
             model_path = os.path.join('./models/', experiment_name, f"ckpt_{epoch:06}", "model/")
             if not os.path.exists(model_path):
@@ -164,17 +172,28 @@ if __name__ == '__main__':
           
 
         if i % 300==0:
-
-          ts = time.time()
-          print('checkpoint saved')
+          
+          print('real dataset training...')
+          mIOU_real = []
+          inference_time = []
           for i, data in enumerate(dataloader_real, 0):
+            ts = time.time()
             input = data[0].numpy()
             label = data[1].numpy()
             sess.run(train,feed_dict={inputs: input, y_: label})
-          inference_time = time.time() - ts
+            inference_time.append(time.time() - ts)
+            # mIOU
+            sess.run(tf.local_variables_initializer()) #https://blog.csdn.net/u013841196/article/details/109533542
+            sess.run([conf_mat_real], feed_dict={inputs: input, y_: label}) # I don't know why you need to run conf_mat first
+            mIOU_real.append( sess.run([iou_real], feed_dict={inputs: input, y_: label})[0] )
+
+          #print(inference_time)
+          #print(mIOU_real)
 
           if args.wandb == True:
-            wandb.log({"inference time": inference_time})
+            wandb.log({"real/train time": sum(inference_time)})
+            wandb.log({"real/average mIOU": sum(mIOU_real)/len(mIOU_real)})
+
 
           model_path = os.path.join('./models/', experiment_name, f"ckpt_{epoch:06}", "model/")
           if not os.path.exists(model_path):
