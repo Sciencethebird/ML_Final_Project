@@ -20,7 +20,7 @@ from tensorflow.python.framework.graph_util import convert_variables_to_constant
 from datasets.dataloader import DataLoaderSegmentation
 
 from networks.deeplabv3plus import DeeplabV3Plus
-from networks.default_unet import default_unet
+from networks.default_unet import deeplab_unet, default_unet
 
 def parse_arguments():
     parser = argparse.ArgumentParser()
@@ -76,6 +76,9 @@ if __name__ == '__main__':
 
     if args.model_name == "default_unet":
       out = default_unet(x, b, depth=args.depth, ch=args.ch)
+      args.backbone = 'CNN'
+    elif args.model_name == "deeplab_unet":
+      out = deeplab_unet(x, b, depth=args.depth, ch=args.ch)
       args.backbone = 'CNN'
     elif args.model_name =="deeplabv3+":
       out = DeeplabV3Plus(x, num_classes=6, backbone=args.backbone)
