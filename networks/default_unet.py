@@ -23,8 +23,8 @@ from tensorflow.keras import layers
 
 def default_unet(x, b, depth=5, ch=15):
     xn = []
-    #x=tf.layers.conv2d(x,ch,3,1,'same')
-    x=layers.Conv2D(ch,3,1,'same')(x)
+    x=tf.layers.conv2d(x,ch,3,1,'same')
+    #x=layers.Conv2D(ch,3,1,'same')(x)
     
     x=tf.layers.batch_normalization(x)
     x = tf.nn.relu(x)
@@ -86,8 +86,8 @@ def DilatedSpatialPyramidPooling(dspp_input):
     
 def deeplab_unet(x, b, depth=5, ch=15):
     xn = []
-    #x=tf.layers.conv2d(x,ch,3,1,'same')
-    x=layers.Conv2D(ch,3,1,'same')(x)
+    x=tf.layers.conv2d(x,ch,3,1,'same')
+    #x=layers.Conv2D(ch,3,1,'same')(x)
     
     x=tf.layers.batch_normalization(x)
     x = tf.nn.relu(x)
