@@ -1,3 +1,4 @@
+from email.policy import default
 import cv2
 from datetime import datetime
 import matplotlib.pyplot as plt
@@ -37,12 +38,17 @@ def parse_arguments():
     parser.add_argument("--lr_init", default=0.001, type=float, help="start learning rate value")
     parser.add_argument("--lr_decay", default=0.85, type=float, help="decay coeff for exponentail decay schedular")
     parser.add_argument("--lr_decay_step_rate", default=4000, type=int, help="step to use for the decay computation")
-    parser.add_argument("--restore_ckpt", default="none", type=str, help="restore checkpoint path")
+
     # deeplabv3 conficuration
     parser.add_argument("--backbone", default="ResNet50", type=str, help="encoder backbone of deeplabv3")
+
     # default_unet and deeplab_unet configuration
     parser.add_argument("--depth", default=4, type=int, help="unet model depth")
     parser.add_argument("--ch", default=15, type=int, help="unet channel number")
+    
+    # checkpoint operation
+    parser.add_argument("--ckpt", default=None, type=str, help="source checkpoint")
+    parser.add_argument("--pb", default="test.pb", type=str, help="output pb file name")
     args = parser.parse_args()
     return args
 
@@ -58,12 +64,12 @@ if __name__ == '__main__':
     input_path='datasets/ICME2022_Training_Dataset/images'#720/1280
     label_path='datasets/ICME2022_Training_Dataset/labels/class_labels'
     dataset = DataLoaderSegmentation(input_path,label_path,'_lane_line_label_id',transforms.Resize(size=(720,1280)))
-    dataloader = torch.utils.data.DataLoader(dataset, batch_size=args.batch_size, shuffle=True)
+    dataloader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=True)
 
     input_path='datasets/ICME2022_Training_Dataset/images_real_world'#1080/1920
     label_path='datasets/ICME2022_Training_Dataset/labels_real_world'
     dataset_real = DataLoaderSegmentation(input_path,label_path,'',transforms.Resize(size=(1080,1920)))
-    dataloader_real = torch.utils.data.DataLoader(dataset_real, batch_size=args.batch_size, shuffle=True)
+    dataloader_real = torch.utils.data.DataLoader(dataset_real, batch_size=1, shuffle=True)
 
 
     inputs = tf.placeholder(tf.float32, shape=(None, None, None, 3))
@@ -82,19 +88,12 @@ if __name__ == '__main__':
     elif args.model_name =="deeplabv3+":
       out = DeeplabV3Plus(x, num_classes=6, backbone=args.backbone)
 
-    outputs_train = tf.image.resize_images(out, (720, 1280))
-    outputs_train = tf.argmax(outputs_train, -1)
-
     outputs = tf.image.resize_images(out, (1080, 1920))
     outputs = tf.argmax(outputs, -1)
 
-    y_label = tf.argmax(y_,-1)
-    iou, conf_mat = tf.metrics.mean_iou(labels=y_label, predictions=outputs_train, num_classes=6)
-    iou_real, conf_mat_real = tf.metrics.mean_iou(labels=y_label, predictions=outputs, num_classes=6)
-
     loss=tf.nn.softmax_cross_entropy_with_logits_v2(logits=out,labels=y)
     loss=tf.reduce_mean(loss)
-    
+
     # learning rate
     global_step = tf.Variable(0, trainable=False)
     increment_global_step = tf.assign(global_step, global_step + 1)
@@ -108,9 +107,7 @@ if __name__ == '__main__':
     init = tf.global_variables_initializer()
     sess = tf.Session()
     sess.run(init)
-    
-    if args.restore_ckpt != "none":
-      saver.restore(sess, f"./models/{args.restore_ckpt}/model/")
+    saver.restore(sess, f"./models/{args.ckpt}/model/")
 
     def stats_graph(graph):
       flops = tf.profiler.profile(graph, options=tf.profiler.ProfileOptionBuilder.float_operation())
@@ -122,79 +119,5 @@ if __name__ == '__main__':
     #print(tf.summary.merge_all())
     #input("press enter to continue...")
 
-    if args.wandb == True:
-      wandb.init(project=args.wandb_project_name, config=args)
-      wandb.run.name = experiment_name
-      wandb.run.save()
-      wandb.config.update(args)
-
-    num_epochs = args.epochs
-    best_mIOU = 0.0
-    mIOU_train = []
-    for epoch in range(num_epochs):
-      for i, data in enumerate(dataloader, 0):
-        # for leanring rate schedule
-        sess.run(increment_global_step)
-        
-        # train
-        input = data[0].numpy()
-        label = data[1].numpy()
-        sess.run(train, feed_dict={inputs: input, y_: label})
-
-        # log
-        if i % 10 == 0:
-          # mIOU
-          sess.run(tf.local_variables_initializer()) #https://blog.csdn.net/u013841196/article/details/109533542
-          sess.run([conf_mat], feed_dict={inputs: input, y_: label}) # I don't know why you need to run conf_mat first
-          mIOU = sess.run([iou], feed_dict={inputs: input, y_: label})[0]
-          mIOU_train.append(mIOU)
-          # loss
-          loss_value = sess.run(loss,feed_dict={inputs: input, y_: label})
-          print("[%d/%d][%s/%d] loss: %.4f"\
-              %(epoch+1, num_epochs, str(i).zfill(4), len(dataloader), loss_value) )
-
-          print(f"\n========== step {sess.run(global_step)} ==========")
-          print(f"[mIOU]: {mIOU}")
-          print(f"[_lr ]: {sess.run(optimizer._lr)}")
-
-          if args.wandb == True:
-            wandb.log({"train/loss": loss_value})
-            wandb.log({"train/learning_rate": sess.run(optimizer._lr)})
-            wandb.log({"train/mIOU": mIOU})
-            wandb.log({"train/mIOU(last 10-10 average)": sum(mIOU_train[-10:]) / 10.0})
-            wandb.log({"train/mIOU(last 100-10 average)": sum(mIOU_train[-100:]) / 100.0})
-            
-          if mIOU > best_mIOU:
-            best_mIOU = mIOU
-            model_path = os.path.join('./models/', experiment_name, f"ckpt_{epoch:06}", "model/")
-            if not os.path.exists(model_path):
-              os.makedirs(model_path)
-            saver.save(sess, model_path)
-            print('checkpoint saved')
-
-        if i % 300==0:
-          
-          print('real dataset training...')
-          mIOU_real = []
-          inference_time = []
-          for i, data in enumerate(dataloader_real, 0):
-            ts = time.time()
-            input = data[0].numpy()
-            label = data[1].numpy()
-            sess.run(train,feed_dict={inputs: input, y_: label})
-            inference_time.append(time.time() - ts)
-            # mIOU
-            sess.run(tf.local_variables_initializer()) #https://blog.csdn.net/u013841196/article/details/109533542
-            sess.run([conf_mat_real], feed_dict={inputs: input, y_: label}) # I don't know why you need to run conf_mat first
-            mIOU_real.append( sess.run([iou_real], feed_dict={inputs: input, y_: label})[0] )
-
-          if args.wandb == True:
-            wandb.log({"real/train time": sum(inference_time)})
-            wandb.log({"real/average mIOU": sum(mIOU_real)/len(mIOU_real)})
-
-
-          model_path = os.path.join('./models/', experiment_name, f"ckpt_{epoch:06}", "model/")
-          if not os.path.exists(model_path):
-              os.makedirs(model_path)
-          saver.save(sess, model_path)
-          print('checkpoint saved')
+    graph_def = convert_variables_to_constants(sess, sess.graph_def, output_node_names = ['ArgMax'])
+    tf.train.write_graph(graph_def, 'pb', args.pb, as_text = False)
